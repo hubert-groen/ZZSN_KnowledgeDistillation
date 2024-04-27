@@ -4,7 +4,10 @@ import torchvision.datasets as datasets
 import os
 import model
 import util
+import numpy as np
+from torch.utils.data import Subset
 
+# read_index = 9
 
 class ResNet:
 
@@ -17,7 +20,7 @@ class ResNet:
         self.test_accuracies = []
         self.start_epoch = 1
 
-    def train(self, save_dir, num_epochs=75, batch_size=256, learning_rate=0.001, test_each_epoch=False, verbose=False):
+    def train(self, save_dir, read_index, num_epochs=75, batch_size=256, learning_rate=0.001, test_each_epoch=False, verbose=False):
         """Trains the network.
 
         Parameters
@@ -47,7 +50,10 @@ class ResNet:
         ])
 
         train_dataset = datasets.CIFAR10('data/cifar', train=True, download=True, transform=train_transform)
-        data_loader = torch.utils.data.DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+        train_idx = np.load(f'indices/train_idx_{read_index}.npy')
+        train_subset = Subset(train_dataset, train_idx)
+        data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+
         criterion = torch.nn.CrossEntropyLoss().cuda() if self.use_cuda else torch.nn.CrossEntropyLoss()
 
         progress_bar = util.ProgressBar()
@@ -94,7 +100,7 @@ class ResNet:
             # Save parameters after every epoch
             self.save_parameters(epoch, directory=save_dir)
 
-    def test(self, batch_size=256):
+    def test(self, read_index, batch_size=256):
         """Tests the network.
 
         """
@@ -105,8 +111,9 @@ class ResNet:
                                              ])
 
         test_dataset = datasets.CIFAR10('data/cifar', train=False, download=True, transform=test_transform)
-
-        data_loader = torch.utils.data.DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
+        train_idx = np.load(f'indices/test_idx_{read_index}.npy')
+        train_subset = Subset(test_dataset, train_idx)
+        data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=False)
 
         correct = 0
         total = 0

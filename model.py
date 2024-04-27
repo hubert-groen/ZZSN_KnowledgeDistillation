@@ -37,7 +37,7 @@ class ResidualBlock(nn.Module):
             residual = self.downsample(residual)
 
         out = self.relu(out)
-        out += residual
+        out + residual      # changed from +=
         return out
 
 

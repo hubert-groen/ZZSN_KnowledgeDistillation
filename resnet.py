@@ -1,5 +1,6 @@
 import torch
 import torchvision.transforms as transforms
+from torch import nn
 import torchvision.datasets as datasets
 import os
 import model
@@ -7,7 +8,6 @@ import util
 import numpy as np
 from torch.utils.data import Subset
 
-# read_index = 9
 
 class ResNet:
 
@@ -20,7 +20,7 @@ class ResNet:
         self.test_accuracies = []
         self.start_epoch = 1
 
-    def train(self, save_dir, read_index, num_epochs=75, batch_size=256, learning_rate=0.001, test_each_epoch=False, verbose=False):
+    def train(self, save_dir, read_index, num_epochs=75, batch_size=256, learning_rate=0.001, test_each_epoch=False, verbose=False, teacher_logits_path=None):
         """Trains the network.
 
         Parameters
@@ -39,6 +39,7 @@ class ResNet:
             True: Print training progress to console, False: silent mode
         """
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self.read_index = read_index
         self.net.train()
 
         train_transform = transforms.Compose([
@@ -49,8 +50,11 @@ class ResNet:
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-        train_dataset = datasets.CIFAR10('data/cifar', train=True, download=True, transform=train_transform)
+        train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform)
         train_idx = np.load(f'indices/train_idx_{read_index}.npy')
+        if teacher_logits_path is not None:
+            teacher_logits = np.load(teacher_logits_path)
+            train_dataset.targets = teacher_logits
         train_subset = Subset(train_dataset, train_idx)
         data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
 
@@ -70,24 +74,37 @@ class ResNet:
 
                 self.optimizer.zero_grad()
                 outputs = self.net.forward(images)
-                loss = criterion(outputs, labels.squeeze_())
+                if teacher_logits_path is None:
+                    loss = criterion(outputs, labels.squeeze_())
+                else:
+                    soft_targets = nn.functional.softmax(labels, dim=-1)
+                    soft_prob = nn.functional.log_softmax(outputs, dim=-1)
+                    loss = torch.sum(soft_targets * (soft_targets.log() - soft_prob)) / soft_prob.size()[0]
                 loss.backward()
                 self.optimizer.step()
 
-                _, predicted = torch.max(outputs.data, dim=1)
-                batch_total = labels.size(0)
-                batch_correct = (predicted == labels.flatten()).sum().item()
+                if teacher_logits_path is None:
+                    _, predicted = torch.max(outputs.data, dim=1)
+                    batch_total = labels.size(0)
+                    batch_correct = (predicted == labels.flatten()).sum().item()
 
-                epoch_total += batch_total
-                epoch_correct += batch_correct
+                    epoch_total += batch_total
+                    epoch_correct += batch_correct
 
-                if verbose:
-                    # Update progress bar in console
-                    info_str = 'Last batch accuracy: {:.4f} - Running epoch accuracy {:.4f}'.\
-                                format(batch_correct / batch_total, epoch_correct / epoch_total)
-                    progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
+                    if verbose:
+                        # Update progress bar in console
+                        info_str = 'Last batch accuracy: {:.4f} - Running epoch accuracy {:.4f}'.\
+                                    format(batch_correct / batch_total, epoch_correct / epoch_total)
+                        progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
+                        self.train_accuracies.append(epoch_correct / epoch_total)
 
-            self.train_accuracies.append(epoch_correct / epoch_total)
+                else:
+                    if verbose:
+                        # Update progress bar in console
+                        info_str = 'Loss: {:.4f}'.\
+                                    format(loss)
+                        progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)           
+
             if verbose:
                 progress_bar.new_line()
 
@@ -110,7 +127,7 @@ class ResNet:
                                              transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
                                              ])
 
-        test_dataset = datasets.CIFAR10('data/cifar', train=False, download=True, transform=test_transform)
+        test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=test_transform, train=False)
         train_idx = np.load(f'indices/test_idx_{read_index}.npy')
         train_subset = Subset(test_dataset, train_idx)
         data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=False)
@@ -149,7 +166,7 @@ class ResNet:
             'optimizer_state_dict': self.optimizer.state_dict(),
             'train_accuracies': self.train_accuracies,
             'test_accuracies': self.test_accuracies
-        }, os.path.join(directory, 'resnet_' + str(epoch) + '.pth'))
+        }, os.path.join(directory, 'resnet_' + str(self.read_index) + '.pth'))
 
     def load_parameters(self, path):
         """Loads the given set of parameters.

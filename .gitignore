@@ -1,3 +1,6 @@
 /__pycache__/*
 /data/*
 /.idea/*
+saves/*
+indices/*
+models/**

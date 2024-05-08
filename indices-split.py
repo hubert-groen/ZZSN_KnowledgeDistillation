@@ -1,18 +1,20 @@
 import torch
 from torchvision import datasets, transforms
-from torch.utils.data import Subset, DataLoader
+from torch.utils.data import Subset, DataLoader, ConcatDataset
 from sklearn.model_selection import StratifiedShuffleSplit
 import numpy as np
-
 
 train_transform = transforms.Compose([
     transforms.ToTensor(),
 ])
 
-train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform)
+train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=True)
+test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
 
+train_targets = train_dataset.targets
+test_targets = test_dataset.targets
 
-targets = np.array(train_dataset.targets)
+targets = np.concatenate([train_targets, test_targets])
 
 all_train_indices = []
 all_test_indices = []
@@ -26,5 +28,3 @@ for i in range(101):
 for i in range(101):
     np.save(f'./indices/train_idx_{i}.npy', all_train_indices[i])
     np.save(f'./indices/test_idx_{i}.npy', all_test_indices[i])
-
-

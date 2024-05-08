@@ -6,7 +6,8 @@ import os
 import model
 import util
 import numpy as np
-from torch.utils.data import Subset
+from torch.utils.data import Subset, ConcatDataset
+import matplotlib.pyplot as plt
 
 
 class ResNet:
@@ -50,17 +51,22 @@ class ResNet:
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-        train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform)
+        train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=True)
+        test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
+        full_dataset = ConcatDataset([train_dataset, test_dataset])
         train_idx = np.load(f'indices/train_idx_{read_index}.npy')
         if teacher_logits_path is not None:
             teacher_logits = np.load(teacher_logits_path)
-            train_dataset.targets = teacher_logits
-        train_subset = Subset(train_dataset, train_idx)
+            test_dataset.targets = teacher_logits
+        train_subset = Subset(full_dataset, train_idx)
         data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
 
         criterion = torch.nn.CrossEntropyLoss().cuda() if self.use_cuda else torch.nn.CrossEntropyLoss()
 
         progress_bar = util.ProgressBar()
+
+        epoch_accuracy = []
+        epoch_loss = []
 
         for epoch in range(self.start_epoch, num_epochs + 1):
             print('Epoch {}/{}'.format(epoch, num_epochs))
@@ -109,13 +115,18 @@ class ResNet:
                 progress_bar.new_line()
 
             if test_each_epoch:
-                test_accuracy = self.test()
+                test_accuracy, test_loss = self.test(read_index=self.read_index)
                 self.test_accuracies.append(test_accuracy)
                 if verbose:
                     print('Test accuracy: {}'.format(test_accuracy))
+                    print('Test loss: {}'.format(test_loss))
+                    epoch_accuracy.append(test_accuracy)
+                    epoch_loss.append(test_loss)
 
             # Save parameters after every epoch
             self.save_parameters(epoch, directory=save_dir)
+        
+        self.plot_metrics(epoch_accuracy, epoch_loss, read_index)
 
     def test(self, read_index, batch_size=256):
         """Tests the network.
@@ -123,17 +134,26 @@ class ResNet:
         """
         self.net.eval()
 
-        test_transform = transforms.Compose([transforms.ToTensor(),
-                                             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
-                                             ])
+        train_transform = transforms.Compose([
+            util.Cutout(num_cutouts=2, size=8, p=0.8),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
 
-        test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=test_transform, train=False)
+        train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=True)
+        test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
+        full_dataset = ConcatDataset([train_dataset, test_dataset])
         train_idx = np.load(f'indices/test_idx_{read_index}.npy')
-        train_subset = Subset(test_dataset, train_idx)
+        train_subset = Subset(full_dataset, train_idx)
         data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=False)
 
         correct = 0
         total = 0
+        total_loss = 0
+        loss_function = torch.nn.CrossEntropyLoss()
+
         with torch.no_grad():
             for i, data in enumerate(data_loader, 0):
                 images, labels = data
@@ -141,12 +161,18 @@ class ResNet:
                 labels = labels.to(self.device)
 
                 outputs = self.net(images)
+                loss = loss_function(outputs, labels)
+                total_loss += loss.item() * images.size(0)
+
                 _, predicted = torch.max(outputs, dim=1)
                 total += labels.size(0)
                 correct += (predicted == labels.flatten()).sum().item()
 
+        accuracy = correct / total * 100
+        average_loss = total_loss / total
+
         self.net.train()
-        return correct / total
+        return accuracy, average_loss
 
     def save_parameters(self, epoch, directory):
         """Saves the parameters of the network to the specified directory.
@@ -184,3 +210,26 @@ class ResNet:
         self.test_accuracies = checkpoint['test_accuracies']
         self.start_epoch = checkpoint['epoch']
 
+    def plot_metrics(self, epoch_accuracy, epoch_loss, read_index):
+        save_dir='saves/plots'
+
+        plt.figure(figsize=(10, 5))
+
+        plt.subplot(1, 2, 1)
+        plt.plot(epoch_accuracy, label='Accuracy', color='b')
+        plt.title('Epoch Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
+
+        plt.subplot(1, 2, 2)
+        plt.plot(epoch_loss, label='Loss', color='r')
+        plt.title('Epoch Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+
+        plt.suptitle(f'STATS for index = {read_index}', fontsize=16)
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, f'accuracy-loss_{read_index}.png'))
+        plt.close()

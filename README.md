@@ -1,3 +1,15 @@
+# STARTING TRAINING IN MAIN
+-- na jakich parametrach trenujemy, takich: ?
+
+python main.py --train_index 1 --save_dir "/saves" --num_epochs 10 --batch_size 32 --learning_rate 0.01 --verbose True  --test_each_epoch True 
+
+
+# HOW TO CHECK CUDA
+import torch
+print(torch.cuda.is_available())
+
+-------------------------------------------------------------------------
+
 # PyTorch ResNet9 for CIFAR-10
 
 I implemented the architecture described in [this](https://myrtle.ai/learn/how-to-train-your-resnet-4-architecture/) blog post. It is a 9-layer ResNet (He et al. 2015) for image classification on [CIFAR-10](https://www.cs.toronto.edu/~kriz/cifar.html) (Krizhevsky 2009).

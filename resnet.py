@@ -21,7 +21,88 @@ class ResNet:
         self.test_accuracies = []
         self.start_epoch = 1
 
-    def train(self, save_dir, read_index, num_epochs=75, batch_size=256, learning_rate=0.001, test_each_epoch=False, verbose=False, teacher_logits_path=None):
+
+    def train_student(self, save_dir, read_index,teacher_logits_path, num_epochs=75, batch_size=256, learning_rate=0.001, test_epoch=1, verbose=False):
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self.read_index = read_index
+        self.net.train()
+
+        train_transform = transforms.Compose([
+            util.Cutout(num_cutouts=2, size=8, p=0.8),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
+        train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=True)
+        test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
+        full_dataset = ConcatDataset([train_dataset, test_dataset])
+        train_idx = np.load(f'indices/train_idx_{read_index}.npy')
+        teacher_logits = np.load(teacher_logits_path)
+        full_dataset.targets = [(teacher_logit, target) for teacher_logit, target in zip(teacher_logits, full_dataset.targets)]
+        train_subset = Subset(full_dataset, train_idx)
+        data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+
+        progress_bar = util.ProgressBar()
+
+        epoch_accuracies_train = []
+        epoch_accuracies_test = []
+        epoch_losses_train = []
+        epoch_losses_test = []
+
+        for epoch in range(self.start_epoch, num_epochs + 1):
+            print('Epoch {}/{}'.format(epoch, num_epochs))
+
+            epoch_correct = 0
+            epoch_total = 0
+            epoch_total_loss_train = 0
+            for i, data in enumerate(data_loader, 1):
+                images, labels = data
+                images = images.to(self.device)
+                logits, targets = labels
+                logits = logits.to(self.device)
+                targets = targets.to(self.device)
+
+                self.optimizer.zero_grad()
+                outputs = self.net.forward(images)
+                soft_targets = nn.functional.softmax(logits, dim=-1)
+                soft_prob = nn.functional.log_softmax(outputs, dim=-1)
+                loss = torch.sum(soft_targets * (soft_targets.log() - soft_prob)) / soft_prob.size()[0]
+                loss.backward()
+                self.optimizer.step()
+
+                _, predicted = torch.max(outputs.data, dim=1)
+                batch_total = labels.size(0)
+                batch_correct = (predicted == targets.flatten()).sum().item()
+
+                epoch_total += batch_total
+                epoch_correct += batch_correct
+                epoch_total_loss_train += loss
+
+            epoch_losses_train.append(epoch_total_loss_train/len(data_loader)) # sum of losses in each batch / total batches 
+            epoch_accuracies_train.append(epoch_correct / epoch_total)
+
+            if verbose:
+                info_str = f"Epoch accuracy: {epoch_accuracies_train[-1]}, Epoch loss: {epoch_losses_train[-1]}"
+                progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
+
+            if verbose:
+                progress_bar.new_line()
+
+            if epoch % test_epoch == 0:
+                test_accuracy, test_loss = self.test(read_index=self.read_index)
+                epoch_losses_test.append(test_loss)
+                epoch_accuracies_test.append(test_accuracy)
+                if verbose:
+                    print('Test accuracy: {}'.format(test_accuracy))
+                    print('Test loss: {}'.format(test_loss))
+
+            # Save parameters after every epoch
+            self.save_parameters(epoch, directory=save_dir)
+        
+        self.plot_metrics(epoch_losses_train, epoch_losses_test, epoch_accuracies_train, epoch_accuracies_test, read_index, test_epoch)
+    def train(self, save_dir, read_index, num_epochs=75, batch_size=256, learning_rate=0.001, test_epoch=1, verbose=False):
         """Trains the network.
 
         Parameters
@@ -34,8 +115,8 @@ class ResNet:
             The batch size
         learning_rate : float
             The learning rate
-        test_each_epoch : boolean
-            True: Test the network after every training epoch, False: no testing
+        test_epoch : int
+            True: Test the network after every test_epoch epochs
         verbose : boolean
             True: Print training progress to console, False: silent mode
         """
@@ -55,9 +136,6 @@ class ResNet:
         test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
         full_dataset = ConcatDataset([train_dataset, test_dataset])
         train_idx = np.load(f'indices/train_idx_{read_index}.npy')
-        if teacher_logits_path is not None:
-            teacher_logits = np.load(teacher_logits_path)
-            test_dataset.targets = teacher_logits
         train_subset = Subset(full_dataset, train_idx)
         data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
 
@@ -65,14 +143,17 @@ class ResNet:
 
         progress_bar = util.ProgressBar()
 
-        epoch_accuracy = []
-        epoch_loss = []
+        epoch_accuracies_train = []
+        epoch_accuracies_test = []
+        epoch_losses_train = []
+        epoch_losses_test = []
 
         for epoch in range(self.start_epoch, num_epochs + 1):
             print('Epoch {}/{}'.format(epoch, num_epochs))
 
             epoch_correct = 0
             epoch_total = 0
+            epoch_total_loss_train = 0
             for i, data in enumerate(data_loader, 1):
                 images, labels = data
                 images = images.to(self.device)
@@ -80,53 +161,37 @@ class ResNet:
 
                 self.optimizer.zero_grad()
                 outputs = self.net.forward(images)
-                if teacher_logits_path is None:
-                    loss = criterion(outputs, labels.squeeze_())
-                else:
-                    soft_targets = nn.functional.softmax(labels, dim=-1)
-                    soft_prob = nn.functional.log_softmax(outputs, dim=-1)
-                    loss = torch.sum(soft_targets * (soft_targets.log() - soft_prob)) / soft_prob.size()[0]
+                loss = criterion(outputs, labels.squeeze_())
                 loss.backward()
                 self.optimizer.step()
 
-                if teacher_logits_path is None:
-                    _, predicted = torch.max(outputs.data, dim=1)
-                    batch_total = labels.size(0)
-                    batch_correct = (predicted == labels.flatten()).sum().item()
+                _, predicted = torch.max(outputs.data, dim=1)
+                batch_total = labels.size(0)
+                batch_correct = (predicted == labels.flatten()).sum().item()
 
-                    epoch_total += batch_total
-                    epoch_correct += batch_correct
+                epoch_total += batch_total
+                epoch_correct += batch_correct
+                epoch_total_loss_train += loss
 
-                    if verbose:
-                        # Update progress bar in console
-                        info_str = 'Last batch accuracy: {:.4f} - Running epoch accuracy {:.4f}'.\
-                                    format(batch_correct / batch_total, epoch_correct / epoch_total)
-                        progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
-                        self.train_accuracies.append(epoch_correct / epoch_total)
-
-                else:
-                    if verbose:
-                        # Update progress bar in console
-                        info_str = 'Loss: {:.4f}'.\
-                                    format(loss)
-                        progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)           
+                if verbose:
+                    info_str = f"Epoch accuracy: {epoch_accuracies_train[-1]}, Epoch loss: {epoch_losses_train[-1]}"
+                    progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
 
             if verbose:
                 progress_bar.new_line()
 
-            if test_each_epoch:
+            if epoch % test_epoch == 0:
                 test_accuracy, test_loss = self.test(read_index=self.read_index)
-                self.test_accuracies.append(test_accuracy)
+                epoch_losses_test.append(test_loss)
+                epoch_accuracies_test.append(test_accuracy)
                 if verbose:
                     print('Test accuracy: {}'.format(test_accuracy))
                     print('Test loss: {}'.format(test_loss))
-                    epoch_accuracy.append(test_accuracy)
-                    epoch_loss.append(test_loss)
 
             # Save parameters after every epoch
             self.save_parameters(epoch, directory=save_dir)
         
-        self.plot_metrics(epoch_accuracy, epoch_loss, read_index)
+        self.plot_metrics(epoch_losses_train, epoch_losses_test, epoch_accuracies_train, epoch_accuracies_test, read_index, test_epoch)
 
     def test(self, read_index, batch_size=256):
         """Tests the network.
@@ -187,11 +252,8 @@ class ResNet:
         if not os.path.exists(directory):
             os.makedirs(directory)
         torch.save({
-            'epoch': epoch,
             'model_state_dict': self.net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
-            'train_accuracies': self.train_accuracies,
-            'test_accuracies': self.test_accuracies
         }, os.path.join(directory, 'resnet_' + str(self.read_index) + '.pth'))
 
     def load_parameters(self, path):
@@ -210,20 +272,26 @@ class ResNet:
         self.test_accuracies = checkpoint['test_accuracies']
         self.start_epoch = checkpoint['epoch']
 
-    def plot_metrics(self, epoch_accuracy, epoch_loss, read_index):
+    def plot_metrics(self, epoch_losses_train, epoch_losses_test, epoch_accuracies_train, epoch_accuracies_test, read_index, test_epoch):
+        epochs = len(epoch_losses_train)
+        test_x_axis_ticks = np.arange(test_epoch, epochs, test_epoch)
+        train_x_axis_ticks = np.arange(1, epochs, 1)
         save_dir='saves/plots'
 
         plt.figure(figsize=(10, 5))
+        plt.style.use("ggplot")
 
         plt.subplot(1, 2, 1)
-        plt.plot(epoch_accuracy, label='Accuracy', color='b')
+        plt.plot(train_x_axis_ticks, epoch_accuracies_train, label='Accuracy Train')
+        plt.plot(test_x_axis_ticks, epoch_accuracies_test, label="Accuracy Test")
         plt.title('Epoch Accuracy')
         plt.xlabel('Epoch')
         plt.ylabel('Accuracy')
         plt.legend()
 
         plt.subplot(1, 2, 2)
-        plt.plot(epoch_loss, label='Loss', color='r')
+        plt.plot(train_x_axis_ticks, epoch_losses_train, label='Loss Train')
+        plt.plot(test_x_axis_ticks, epoch_losses_test, label="Loss Test")
         plt.title('Epoch Loss')
         plt.xlabel('Epoch')
         plt.ylabel('Loss')

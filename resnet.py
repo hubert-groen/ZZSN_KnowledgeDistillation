@@ -57,7 +57,7 @@ class ResNet:
         train_idx = np.load(f'indices/train_idx_{read_index}.npy')
         if teacher_logits_path is not None:
             teacher_logits = np.load(teacher_logits_path)
-            test_dataset.targets = teacher_logits
+            full_dataset.targets = teacher_logits
         train_subset = Subset(full_dataset, train_idx)
         data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
 
@@ -145,9 +145,9 @@ class ResNet:
         train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=True)
         test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
         full_dataset = ConcatDataset([train_dataset, test_dataset])
-        train_idx = np.load(f'indices/test_idx_{read_index}.npy')
-        train_subset = Subset(full_dataset, train_idx)
-        data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=False)
+        test_idx = np.load(f'indices/test_idx_{read_index}.npy')
+        test_subset = Subset(full_dataset, test_idx)
+        data_loader = torch.utils.data.DataLoader(test_subset, batch_size=batch_size, shuffle=False)
 
         correct = 0
         total = 0
@@ -162,14 +162,14 @@ class ResNet:
 
                 outputs = self.net(images)
                 loss = loss_function(outputs, labels)
-                total_loss += loss.item() * images.size(0)
+                total_loss += loss.item()
 
                 _, predicted = torch.max(outputs, dim=1)
                 total += labels.size(0)
                 correct += (predicted == labels.flatten()).sum().item()
 
-        accuracy = correct / total * 100
-        average_loss = total_loss / total
+        accuracy = (correct / batch_size) * 100
+        average_loss = total_loss / batch_size
 
         self.net.train()
         return accuracy, average_loss

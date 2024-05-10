@@ -8,7 +8,13 @@ import util
 import numpy as np
 from torch.utils.data import Subset, ConcatDataset
 import matplotlib.pyplot as plt
+import datetime
+import random
 
+
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
 
 class ResNet:
 
@@ -23,6 +29,9 @@ class ResNet:
 
 
     def train_student(self, save_dir, read_index,teacher_logits_path, num_epochs=75, batch_size=256, learning_rate=0.001, test_epoch=1, verbose=False):
+        if train_idx == 0:
+            raise ValueError("Train idx cant be 0")
+
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
         self.read_index = read_index
         self.net.train()
@@ -35,12 +44,13 @@ class ResNet:
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
+        teacher_logits = np.load(teacher_logits_path)
         train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=True)
+        train_dataset.targets = [(teacher_logit, target) for teacher_logit, target in zip(teacher_logits["logits_arr_train"], train_dataset.targets)]
         test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
+        test_dataset.targets = [(teacher_logit, target) for teacher_logit, target in zip(teacher_logits["logits_arr_test"], test_dataset.targets)]
         full_dataset = ConcatDataset([train_dataset, test_dataset])
         train_idx = np.load(f'indices/train_idx_{read_index}.npy')
-        teacher_logits = np.load(teacher_logits_path)
-        full_dataset.targets = [(teacher_logit, target) for teacher_logit, target in zip(teacher_logits, full_dataset.targets)]
         train_subset = Subset(full_dataset, train_idx)
         data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
 
@@ -73,22 +83,24 @@ class ResNet:
                 self.optimizer.step()
 
                 _, predicted = torch.max(outputs.data, dim=1)
-                batch_total = labels.size(0)
+                batch_total = targets.size(0)
                 batch_correct = (predicted == targets.flatten()).sum().item()
 
                 epoch_total += batch_total
                 epoch_correct += batch_correct
-                epoch_total_loss_train += loss
+                epoch_total_loss_train += loss.item()
 
-            epoch_losses_train.append(epoch_total_loss_train/len(data_loader)) # sum of losses in each batch / total batches 
+
+                if verbose:
+                        info_str = f"Epoch accuracy: {batch_correct / batch_total}, Epoch loss: {loss.item()}"
+                        progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
+
             epoch_accuracies_train.append(epoch_correct / epoch_total)
-
-            if verbose:
-                info_str = f"Epoch accuracy: {epoch_accuracies_train[-1]}, Epoch loss: {epoch_losses_train[-1]}"
-                progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
-
+            epoch_losses_train.append(epoch_total_loss_train / len(data_loader))
             if verbose:
                 progress_bar.new_line()
+                print(f"Epoch {epoch} accuracy: {epoch_accuracies_train[-1]}, Epoch loss: {epoch_losses_train[-1]}")
+
 
             if epoch % test_epoch == 0:
                 test_accuracy, test_loss = self.test(read_index=self.read_index)
@@ -99,9 +111,10 @@ class ResNet:
                     print('Test loss: {}'.format(test_loss))
 
             # Save parameters after every epoch
-            self.save_parameters(epoch, directory=save_dir)
+            self.save_parameters(epoch_accuracies_train, epoch_accuracies_test, epoch_losses_train, epoch_losses_test, test_epoch, directory=save_dir)
         
         self.plot_metrics(epoch_losses_train, epoch_losses_test, epoch_accuracies_train, epoch_accuracies_test, read_index, test_epoch)
+    
     def train(self, save_dir, read_index, num_epochs=75, batch_size=256, learning_rate=0.001, test_epoch=1, verbose=False):
         """Trains the network.
 
@@ -171,14 +184,19 @@ class ResNet:
 
                 epoch_total += batch_total
                 epoch_correct += batch_correct
-                epoch_total_loss_train += loss
+                epoch_total_loss_train += loss.item()
 
                 if verbose:
-                    info_str = f"Epoch accuracy: {epoch_accuracies_train[-1]}, Epoch loss: {epoch_losses_train[-1]}"
+                    info_str = f"Epoch accuracy: {batch_correct / batch_total}, Epoch loss: {loss.item()}"
                     progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
 
+
+            epoch_accuracies_train.append(epoch_correct / epoch_total)
+            epoch_losses_train.append(epoch_total_loss_train / len(data_loader))
             if verbose:
                 progress_bar.new_line()
+                print(f"Epoch {epoch} accuracy: {epoch_accuracies_train[-1]}, Epoch loss: {epoch_losses_train[-1]}")
+
 
             if epoch % test_epoch == 0:
                 test_accuracy, test_loss = self.test(read_index=self.read_index)
@@ -189,30 +207,27 @@ class ResNet:
                     print('Test loss: {}'.format(test_loss))
 
             # Save parameters after every epoch
-            self.save_parameters(epoch, directory=save_dir)
+            self.save_parameters(epoch_accuracies_train, epoch_accuracies_test, epoch_losses_train, epoch_losses_test, test_epoch, directory=save_dir)
         
         self.plot_metrics(epoch_losses_train, epoch_losses_test, epoch_accuracies_train, epoch_accuracies_test, read_index, test_epoch)
 
-    def test(self, read_index, batch_size=256):
+    def test(self, read_index, batch_size=1024):
         """Tests the network.
 
         """
         self.net.eval()
 
         train_transform = transforms.Compose([
-            util.Cutout(num_cutouts=2, size=8, p=0.8),
-            transforms.RandomCrop(32, padding=4),
-            transforms.RandomHorizontalFlip(),
             transforms.ToTensor(),
             transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
         ])
 
-        train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=True)
-        test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
+        train_dataset = datasets.CIFAR10('data/cifar', transform=train_transform, train=True)
+        test_dataset = datasets.CIFAR10('data/cifar', transform=train_transform, train=False)
         full_dataset = ConcatDataset([train_dataset, test_dataset])
-        train_idx = np.load(f'indices/test_idx_{read_index}.npy')
-        train_subset = Subset(full_dataset, train_idx)
-        data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=False)
+        test_idx = np.load(f'indices/test_idx_{read_index}.npy')
+        test_subset = Subset(full_dataset, test_idx)
+        data_loader = torch.utils.data.DataLoader(test_subset, batch_size=batch_size, shuffle=False)
 
         correct = 0
         total = 0
@@ -227,19 +242,19 @@ class ResNet:
 
                 outputs = self.net(images)
                 loss = loss_function(outputs, labels)
-                total_loss += loss.item() * images.size(0)
+                total_loss += loss.item()
+                total += len(labels)
 
                 _, predicted = torch.max(outputs, dim=1)
-                total += labels.size(0)
                 correct += (predicted == labels.flatten()).sum().item()
 
-        accuracy = correct / total * 100
-        average_loss = total_loss / total
+        accuracy = correct / total
+        average_loss = total_loss / len(data_loader)
 
         self.net.train()
         return accuracy, average_loss
 
-    def save_parameters(self, epoch, directory):
+    def save_parameters(self, acc_train, acc_test, loss_train, loss_test, test_epoch, directory):
         """Saves the parameters of the network to the specified directory.
 
         Parameters
@@ -254,6 +269,11 @@ class ResNet:
         torch.save({
             'model_state_dict': self.net.state_dict(),
             'optimizer_state_dict': self.optimizer.state_dict(),
+            'accuracies_train': acc_train,
+            'accuracies_test': acc_test,
+            'losses_train': loss_train,
+            'losses_test': loss_test,
+            'test_epoch': test_epoch
         }, os.path.join(directory, 'resnet_' + str(self.read_index) + '.pth'))
 
     def load_parameters(self, path):
@@ -264,18 +284,14 @@ class ResNet:
         path : str
             The file path pointing to the file containing the parameters
         """
-        self.optimizer = torch.optim.Adam(self.net.parameters())
         checkpoint = torch.load(path, map_location=self.device)
         self.net.load_state_dict(checkpoint['model_state_dict'])
-        self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        self.train_accuracies = checkpoint['train_accuracies']
-        self.test_accuracies = checkpoint['test_accuracies']
-        self.start_epoch = checkpoint['epoch']
+        
 
     def plot_metrics(self, epoch_losses_train, epoch_losses_test, epoch_accuracies_train, epoch_accuracies_test, read_index, test_epoch):
         epochs = len(epoch_losses_train)
-        test_x_axis_ticks = np.arange(test_epoch, epochs, test_epoch)
-        train_x_axis_ticks = np.arange(1, epochs, 1)
+        test_x_axis_ticks = np.arange(test_epoch, epochs+1, test_epoch)
+        train_x_axis_ticks = np.arange(1, epochs+1, 1)
         save_dir='saves/plots'
 
         plt.figure(figsize=(10, 5))

@@ -29,7 +29,7 @@ class ResNet:
 
 
     def train_student(self, save_dir, read_index,teacher_logits_path, num_epochs=75, batch_size=256, learning_rate=0.001, test_epoch=1, verbose=False):
-        if train_idx == 0:
+        if read_index == 0:
             raise ValueError("Train idx cant be 0")
 
         self.optimizer = torch.optim.Adam(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)

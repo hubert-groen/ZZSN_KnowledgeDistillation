@@ -77,3 +77,19 @@ class Net(nn.Module):
         out = self.fc(out)
         return out
 
+
+class MLPModel(nn.Module):
+    def __init__(self, hidden_dim=32*32*3, n_classes=10):
+        super(MLPModel, self).__init__()
+        
+        self.linear1 = nn.Linear(32*32*3, hidden_dim)
+        self.relu1 = nn.ReLU()
+        self.linear2 = nn.Linear(hidden_dim, n_classes)
+
+
+    def forward(self, x):
+        x = x.flatten()
+        x = self.linear1(x)
+        x = self.relu1(x)
+        x = self.linear2(x)
+        return x

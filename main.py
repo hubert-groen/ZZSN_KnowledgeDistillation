@@ -3,7 +3,7 @@ import argparse
 
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--train_index', type=int, default=1)
+parser.add_argument('--train_index', type=int, default=7)
 parser.add_argument('--save_dir', default="models")
 parser.add_argument('--num_epochs', type=int, default=60)
 parser.add_argument("--batch_size", type=int, default=256)
@@ -15,7 +15,6 @@ args = vars(parser.parse_args())
 
 
 
-net = ResNet()
 
 # net.train(save_dir=args['save_dir'],
 #           read_index=args['train_index'],
@@ -26,13 +25,14 @@ net = ResNet()
 #           test_epoch=args["test_epoch"]
 #           )
 
-
-net.train_student(save_dir=args['save_dir'],
-          read_index=args['train_index'],
-          num_epochs=args['num_epochs'],
-          batch_size=args['batch_size'],
-          learning_rate=args['learning_rate'],
-          verbose=args['verbose'],
-          test_epoch=args["test_epoch"],
-          teacher_logits_path=args['teacher_logits_path']
-          )
+for n in range(15, 51):
+    net = ResNet()
+    net.train_student(save_dir=args['save_dir'],
+            read_index=n,
+            num_epochs=args['num_epochs'],
+            batch_size=args['batch_size'],
+            learning_rate=args['learning_rate'],
+            verbose=args['verbose'],
+            test_epoch=args["test_epoch"],
+            teacher_logits_path=args['teacher_logits_path']
+            )

@@ -28,7 +28,7 @@ class ResNet:
         self.start_epoch = 1
 
 
-    def train_student(self, save_dir, read_index,teacher_logits_path, num_epochs=75, batch_size=256, learning_rate=0.001, test_epoch=1, verbose=False):
+    def train_student(self, save_dir, read_index, teacher_logits_path, num_epochs=75, batch_size=256, learning_rate=0.001, test_epoch=1, verbose=False):
         if read_index == 0:
             raise ValueError("Train idx cant be 0")
 

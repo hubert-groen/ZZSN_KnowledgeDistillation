@@ -13,7 +13,7 @@ parser.add_argument("--save_dir", default="saves/logits")
 args = vars(parser.parse_args())
 
 
-for k in range(0, 25):
+for k in range(25, 101):
     print(k)
     resnet = ResNet()
     args["model_path"] = f"models/resnet_{k}.pth"

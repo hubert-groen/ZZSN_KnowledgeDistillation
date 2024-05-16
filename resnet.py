@@ -287,7 +287,6 @@ class ResNet:
         checkpoint = torch.load(path, map_location=self.device)
         self.net.load_state_dict(checkpoint['model_state_dict'])
         
-
     def plot_metrics(self, epoch_losses_train, epoch_losses_test, epoch_accuracies_train, epoch_accuracies_test, read_index, test_epoch):
         epochs = len(epoch_losses_train)
         test_x_axis_ticks = np.arange(test_epoch, epochs+1, test_epoch)

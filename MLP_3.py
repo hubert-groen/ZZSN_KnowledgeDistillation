@@ -1,0 +1,341 @@
+import torch
+import torchvision.transforms as transforms
+from torch import nn
+import torchvision.datasets as datasets
+import os
+import util
+import numpy as np
+from torch.utils.data import Subset, ConcatDataset
+import matplotlib.pyplot as plt
+import random
+import model
+from collections import OrderedDict
+
+
+
+torch.manual_seed(42)
+np.random.seed(42)
+random.seed(42)
+
+class MultiLayerPerceptron(nn.Module):
+    def __init__(self, input_size, hidden_size, num_classes):
+        super(MultiLayerPerceptron, self).__init__()
+        self.fc1 = nn.Linear(input_size, hidden_size)
+        self.relu = nn.ReLU()
+        self.fc2 = nn.Linear(hidden_size, num_classes)
+
+    def forward(self, x):
+        out = self.fc1(x)
+        out = self.relu(out)
+        out = self.fc2(out)
+        return out
+
+class MLPTrainer:
+    def __init__(self):
+        self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+        self.use_cuda = torch.cuda.is_available()
+        # self.net = None
+        self.net = model.Net().cuda() if self.use_cuda else model.Net()
+        self.optimizer = None
+        self.train_accuracies = []
+        self.test_accuracies = []
+        self.start_epoch = 1
+
+    def train_student(self, save_dir, read_index, teacher_logits_path, num_epochs=75, batch_size=256, learning_rate=0.001, test_epoch=1, verbose=False):
+        input_size = 3 * 32 * 32  # CIFAR10 image size
+        hidden_size = 512  # Example hidden layer size
+        num_classes = 10  # CIFAR10 classes
+
+        self.net = MultiLayerPerceptron(input_size, hidden_size, num_classes)
+        if self.use_cuda:
+            self.net = self.net.to(self.device)
+
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self.read_index = read_index
+        self.net.train()
+
+        train_transform = transforms.Compose([
+            util.Cutout(num_cutouts=2, size=8, p=0.8),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
+        teacher_logits = np.load(teacher_logits_path)
+        train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=True)
+        train_dataset.targets = [(teacher_logit, target) for teacher_logit, target in zip(teacher_logits["logits_arr_train"], train_dataset.targets)]
+        test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
+        test_dataset.targets = [(teacher_logit, target) for teacher_logit, target in zip(teacher_logits["logits_arr_test"], test_dataset.targets)]
+        full_dataset = ConcatDataset([train_dataset, test_dataset])
+        train_idx = np.load(f'indices/train_idx_{read_index}.npy')
+        train_subset = Subset(full_dataset, train_idx)
+        data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+
+        criterion = nn.KLDivLoss(reduction='batchmean').to(self.device)
+
+        progress_bar = util.ProgressBar()
+
+        epoch_accuracies_train = []
+        epoch_accuracies_test = []
+        epoch_losses_train = []
+        epoch_losses_test = []
+
+        for epoch in range(self.start_epoch, num_epochs + 1):
+            print('Epoch {}/{}'.format(epoch, num_epochs))
+
+            epoch_correct = 0
+            epoch_total = 0
+            epoch_total_loss_train = 0
+            for i, data in enumerate(data_loader, 1):
+                images, labels = data
+                images = images.view(images.size(0), -1).to(self.device)
+                logits, targets = labels
+                logits = logits.to(self.device)
+                targets = targets.to(self.device)
+
+                self.optimizer.zero_grad()
+                outputs = self.net(images)
+                soft_targets = nn.functional.softmax(logits, dim=-1)
+                soft_prob = nn.functional.log_softmax(outputs, dim=-1)
+                loss = criterion(soft_prob, soft_targets)
+                loss.backward()
+                self.optimizer.step()
+
+                _, predicted = torch.max(outputs.data, dim=1)
+                batch_total = targets.size(0)
+                batch_correct = (predicted == targets.flatten()).sum().item()
+
+                epoch_total += batch_total
+                epoch_correct += batch_correct
+                epoch_total_loss_train += loss.item()
+
+                if verbose:
+                    info_str = f"Epoch accuracy: {batch_correct / batch_total}, Epoch loss: {loss.item()}"
+                    progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
+
+            epoch_accuracies_train.append(epoch_correct / epoch_total)
+            epoch_losses_train.append(epoch_total_loss_train / len(data_loader))
+            if verbose:
+                progress_bar.new_line()
+                print(f"Epoch {epoch} accuracy: {epoch_accuracies_train[-1]}, Epoch loss: {epoch_losses_train[-1]}")
+
+            if epoch % test_epoch == 0:
+                test_accuracy, test_loss = self.test(read_index=self.read_index)
+                epoch_losses_test.append(test_loss)
+                epoch_accuracies_test.append(test_accuracy)
+                if verbose:
+                    print('Test accuracy: {}'.format(test_accuracy))
+                    print('Test loss: {}'.format(test_loss))
+
+            # Save parameters after every epoch
+            self.save_parameters(epoch_accuracies_train, epoch_accuracies_test, epoch_losses_train, epoch_losses_test, test_epoch, directory=save_dir)
+
+        self.plot_metrics(epoch_losses_train, epoch_losses_test, epoch_accuracies_train, epoch_accuracies_test, read_index, test_epoch)
+
+    def train(self, save_dir, read_index, num_epochs=75, batch_size=256, learning_rate=0.001, test_epoch=1, verbose=False):
+        input_size = 3 * 32 * 32  # CIFAR10 image size
+        hidden_size = 512  # Example hidden layer size
+        num_classes = 10  # CIFAR10 classes
+
+        self.net = MultiLayerPerceptron(input_size, hidden_size, num_classes)
+        if self.use_cuda:
+            self.net = self.net.to(self.device)
+
+        self.optimizer = torch.optim.Adam(self.net.parameters(), lr=learning_rate, weight_decay=1e-5)
+        self.read_index = read_index
+        self.net.train()
+
+        train_transform = transforms.Compose([
+            util.Cutout(num_cutouts=2, size=8, p=0.8),
+            transforms.RandomCrop(32, padding=4),
+            transforms.RandomHorizontalFlip(),
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
+        train_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=True)
+        test_dataset = datasets.CIFAR10('data/cifar', download=True, transform=train_transform, train=False)
+        full_dataset = ConcatDataset([train_dataset, test_dataset])
+        train_idx = np.load(f'indices/train_idx_{read_index}.npy')
+        train_subset = Subset(full_dataset, train_idx)
+        data_loader = torch.utils.data.DataLoader(train_subset, batch_size=batch_size, shuffle=True)
+
+        criterion = torch.nn.CrossEntropyLoss().to(self.device)
+
+        progress_bar = util.ProgressBar()
+
+        epoch_accuracies_train = []
+        epoch_accuracies_test = []
+        epoch_losses_train = []
+        epoch_losses_test = []
+
+        for epoch in range(self.start_epoch, num_epochs + 1):
+            print('Epoch {}/{}'.format(epoch, num_epochs))
+
+            epoch_correct = 0
+            epoch_total = 0
+            epoch_total_loss_train = 0
+            for i, data in enumerate(data_loader, 1):
+                images, labels = data
+                images = images.view(images.size(0), -1).to(self.device)
+                labels = labels.to(self.device)
+
+                self.optimizer.zero_grad()
+                outputs = self.net(images)
+                loss = criterion(outputs, labels)
+                loss.backward()
+                self.optimizer.step()
+
+                _, predicted = torch.max(outputs.data, dim=1)
+                batch_total = labels.size(0)
+                batch_correct = (predicted == labels.flatten()).sum().item()
+
+                epoch_total += batch_total
+                epoch_correct += batch_correct
+                epoch_total_loss_train += loss.item()
+
+                if verbose:
+                    info_str = f"Epoch accuracy: {batch_correct / batch_total}, Epoch loss: {loss.item()}"
+                    progress_bar.update(max_value=len(data_loader), current_value=i, info=info_str)
+
+            epoch_accuracies_train.append(epoch_correct / epoch_total)
+            epoch_losses_train.append(epoch_total_loss_train / len(data_loader))
+            if verbose:
+                progress_bar.new_line()
+                print(f"Epoch {epoch} accuracy: {epoch_accuracies_train[-1]}, Epoch loss: {epoch_losses_train[-1]}")
+
+            if epoch % test_epoch == 0:
+                test_accuracy, test_loss = self.test(read_index=self.read_index)
+                epoch_losses_test.append(test_loss)
+                epoch_accuracies_test.append(test_accuracy)
+                if verbose:
+                    print('Test accuracy: {}'.format(test_accuracy))
+                    print('Test loss: {}'.format(test_loss))
+
+            # Save parameters after every epoch
+            self.save_parameters(epoch_accuracies_train, epoch_accuracies_test, epoch_losses_train, epoch_losses_test, test_epoch, directory=save_dir)
+
+        self.plot_metrics(epoch_losses_train, epoch_losses_test, epoch_accuracies_train, epoch_accuracies_test, read_index, test_epoch)
+
+    def test(self, read_index, batch_size=1024):
+        self.net.eval()
+
+        train_transform = transforms.Compose([
+            transforms.ToTensor(),
+            transforms.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+        ])
+
+        train_dataset = datasets.CIFAR10('data/cifar', transform=train_transform, train=True)
+        test_dataset = datasets.CIFAR10('data/cifar', transform=train_transform, train=False)
+        full_dataset = ConcatDataset([train_dataset, test_dataset])
+        test_idx = np.load(f'indices/test_idx_{read_index}.npy')
+        test_subset = Subset(full_dataset, test_idx)
+        data_loader = torch.utils.data.DataLoader(test_subset, batch_size=batch_size, shuffle=False)
+
+        correct = 0
+        total = 0
+        total_loss = 0
+        loss_function = torch.nn.CrossEntropyLoss()
+
+        with torch.no_grad():
+            for i, data in enumerate(data_loader, 0):
+                images, labels = data
+                images = images.view(images.size(0), -1).to(self.device)
+                labels = labels.to(self.device)
+
+                outputs = self.net(images)
+                loss = loss_function(outputs, labels)
+                total_loss += loss.item()
+                total += len(labels)
+
+                _, predicted = torch.max(outputs, dim=1)
+                correct += (predicted == labels.flatten()).sum().item()
+
+        accuracy = correct / total
+        average_loss = total_loss / len(data_loader)
+
+        self.net.train()
+        return accuracy, average_loss
+
+    def save_parameters(self, acc_train, acc_test, loss_train, loss_test, test_epoch, directory):
+        if not os.path.exists(directory):
+            os.makedirs(directory)
+        torch.save({
+            'model_state_dict': self.net.state_dict(),
+            'optimizer_state_dict': self.optimizer.state_dict(),
+            'accuracies_train': acc_train,
+            'accuracies_test': acc_test,
+            'losses_train': loss_train,
+            'losses_test': loss_test,
+            'test_epoch': test_epoch
+        }, os.path.join(directory, 'mlp_' + str(self.read_index) + '.pth'))
+
+    def load_parameters(self, path):
+        checkpoint = torch.load(path, map_location=self.device)
+        self.net.load_state_dict(checkpoint['model_state_dict'])
+
+
+    def load_parameters(self, path):
+        """Loads the given set of parameters.
+
+        Parameters
+        ----------
+        path : str
+            The file path pointing to the file containing the parameters
+        """
+        checkpoint = torch.load(path, map_location=self.device)
+        
+        # Utwórz pusty słownik dla nowego stanu modelu
+        new_state_dict = OrderedDict()
+        
+        # Pobierz klucze oryginalnego stanu modelu
+        original_state_dict_keys = checkpoint['model_state_dict'].keys()
+
+        # Iteruj po kluczach oryginalnego stanu modelu
+        for key in original_state_dict_keys:
+            # Jeśli klucz odpowiada warstwie "fc1", zastąp go przez "fc.0"
+            if "fc1" in key:
+                new_key = key.replace("fc1", "fc.0")
+            # Jeśli klucz odpowiada warstwie "fc2", zastąp go przez "fc.3"
+            elif "fc2" in key:
+                new_key = key.replace("fc2", "fc.3")
+            # Pozostałe klucze przepisz bez zmian
+            else:
+                new_key = key
+
+            # Dodaj klucz i wartość do nowego słownika
+            new_state_dict[new_key] = checkpoint['model_state_dict'][key]
+
+        # Załaduj zmodyfikowany stan modelu
+        self.net.load_state_dict(new_state_dict)
+
+    def plot_metrics(self, train_losses, test_losses, train_accuracies, test_accuracies, read_index, test_epoch):
+        epochs = len(train_losses)
+        test_x_axis_ticks = np.arange(test_epoch, epochs+1, test_epoch)
+        train_x_axis_ticks = np.arange(1, epochs+1, 1)
+        save_dir='saves-MLP/plots'
+
+        plt.figure(figsize=(10, 5))
+        plt.style.use("ggplot")
+
+        plt.subplot(1, 2, 1)
+        plt.plot(train_x_axis_ticks, train_accuracies, label='Accuracy Train')
+        plt.plot(test_x_axis_ticks, test_accuracies, label="Accuracy Test")
+        plt.title('Epoch Accuracy')
+        plt.xlabel('Epoch')
+        plt.ylabel('Accuracy')
+        plt.legend()
+
+        plt.subplot(1, 2, 2)
+        plt.plot(train_x_axis_ticks, train_losses, label='Loss Train')
+        plt.plot(test_x_axis_ticks, test_losses, label="Loss Test")
+        plt.title('Epoch Loss')
+        plt.xlabel('Epoch')
+        plt.ylabel('Loss')
+        plt.legend()
+
+        plt.suptitle(f'STATS for index = {read_index}', fontsize=16)
+        plt.tight_layout()
+        plt.savefig(os.path.join(save_dir, f'accuracy-loss_{read_index}.png'))
+        plt.close()

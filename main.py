@@ -14,7 +14,7 @@ parser.add_argument("--test_epoch", type=int, default=2)
 args = vars(parser.parse_args())
 
 
-
+net = ResNet()
 
 # net.train(save_dir=args['save_dir'],
 #           read_index=args['train_index'],
@@ -25,7 +25,8 @@ args = vars(parser.parse_args())
 #           test_epoch=args["test_epoch"]
 #           )
 
-for n in range(15, 51):
+
+for n in range(1, 3):
     net = ResNet()
     net.train_student(save_dir=args['save_dir'],
             read_index=n,

@@ -1,4 +1,5 @@
 from resnet import ResNet
+from MLP_3 import MLPTrainer
 import numpy as np
 import torch
 from torchvision import datasets
@@ -7,16 +8,16 @@ from torch.utils.data import ConcatDataset
 import argparse
 
 parser = argparse.ArgumentParser()
-parser.add_argument('--model_path', default="models/resnet_1.pth")
+parser.add_argument('--model_path', default="models-MLP/mlp_1.pth")
 parser.add_argument("--batch_size", default=1000)
-parser.add_argument("--save_dir", default="saves/logits")
+parser.add_argument("--save_dir", default="saves-MLP/logits")
 args = vars(parser.parse_args())
 
 
-for k in range(34, 101):
+for k in range(7, 8):
     print(k)
-    resnet = ResNet()
-    args["model_path"] = f"models/resnet_{k}.pth"
+    resnet = MLPTrainer()
+    args["model_path"] = f"models-MLP/mlp_{k}.pth"
 
     weights_path = args["model_path"]
     model_name = args["model_path"].split("/")[-1].split(".")[0]

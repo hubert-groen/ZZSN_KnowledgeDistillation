@@ -275,41 +275,6 @@ class MLPTrainer:
         checkpoint = torch.load(path, map_location=self.device)
         self.net.load_state_dict(checkpoint['model_state_dict'])
 
-
-    def load_parameters(self, path):
-        """Loads the given set of parameters.
-
-        Parameters
-        ----------
-        path : str
-            The file path pointing to the file containing the parameters
-        """
-        checkpoint = torch.load(path, map_location=self.device)
-        
-        # Utwórz pusty słownik dla nowego stanu modelu
-        new_state_dict = OrderedDict()
-        
-        # Pobierz klucze oryginalnego stanu modelu
-        original_state_dict_keys = checkpoint['model_state_dict'].keys()
-
-        # Iteruj po kluczach oryginalnego stanu modelu
-        for key in original_state_dict_keys:
-            # Jeśli klucz odpowiada warstwie "fc1", zastąp go przez "fc.0"
-            if "fc1" in key:
-                new_key = key.replace("fc1", "fc.0")
-            # Jeśli klucz odpowiada warstwie "fc2", zastąp go przez "fc.3"
-            elif "fc2" in key:
-                new_key = key.replace("fc2", "fc.3")
-            # Pozostałe klucze przepisz bez zmian
-            else:
-                new_key = key
-
-            # Dodaj klucz i wartość do nowego słownika
-            new_state_dict[new_key] = checkpoint['model_state_dict'][key]
-
-        # Załaduj zmodyfikowany stan modelu
-        self.net.load_state_dict(new_state_dict)
-
     def plot_metrics(self, train_losses, test_losses, train_accuracies, test_accuracies, read_index, test_epoch):
         epochs = len(train_losses)
         test_x_axis_ticks = np.arange(test_epoch, epochs+1, test_epoch)

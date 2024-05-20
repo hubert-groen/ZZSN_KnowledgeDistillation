@@ -20,7 +20,7 @@ class MLP:
     def __init__(self):
         self.device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
         self.use_cuda = torch.cuda.is_available()
-        self.net = model.MLPModel().cuda() if self.use_cuda else model.Net()
+        self.net = model.MLPModel().cuda() if self.use_cuda else model.MLPModel()
         self.optimizer = None
         self.train_accuracies = []
         self.test_accuracies = []
@@ -273,7 +273,7 @@ class MLP:
             'losses_train': loss_train,
             'losses_test': loss_test,
             'test_epoch': test_epoch
-        }, os.path.join(directory, 'resnet_' + str(self.read_index) + '.pth'))
+        }, os.path.join(directory, 'mlp_' + str(self.read_index) + '.pth'))
 
     def load_parameters(self, path):
         """Loads the given set of parameters.
@@ -291,7 +291,7 @@ class MLP:
         epochs = len(epoch_losses_train)
         test_x_axis_ticks = np.arange(test_epoch, epochs+1, test_epoch)
         train_x_axis_ticks = np.arange(1, epochs+1, 1)
-        save_dir='saves/plots'
+        save_dir='saves-MLP/plots'
 
         plt.figure(figsize=(10, 5))
         plt.style.use("ggplot")

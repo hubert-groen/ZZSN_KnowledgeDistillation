@@ -1,5 +1,5 @@
 import torch.nn as nn
-
+import torch
 
 class ResidualBlock(nn.Module):
     """
@@ -79,7 +79,7 @@ class Net(nn.Module):
 
 
 class MLPModel(nn.Module):
-    def __init__(self, hidden_dim=32*32*3, n_classes=10):
+    def __init__(self, hidden_dim=256, n_classes=10):
         super(MLPModel, self).__init__()
         
         self.linear1 = nn.Linear(32*32*3, hidden_dim)
@@ -88,7 +88,7 @@ class MLPModel(nn.Module):
 
 
     def forward(self, x):
-        x = x.flatten()
+        x = torch.flatten(x, start_dim=1)
         x = self.linear1(x)
         x = self.relu1(x)
         x = self.linear2(x)

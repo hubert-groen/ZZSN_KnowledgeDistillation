@@ -1,4 +1,4 @@
-from MLP_3 import MLPTrainer
+from mlp import MLP
 import numpy as np
 import torch
 from torchvision import datasets
@@ -12,10 +12,11 @@ parser.add_argument("--batch_size", default=1000)
 parser.add_argument("--save_dir", default="saves-MLP/logits")
 args = vars(parser.parse_args())
 
-for k in range(7, 8):
+for k in range(1, 101):
     print(k)
-    mlp_trainer = MLPTrainer()  # Utwórz instancję klasy MLPTrainer
+    mlp_trainer = MLP()  # Utwórz instancję klasy MLPTrainer
     args["model_path"] = f"models-MLP/mlp_{k}.pth"
+
 
     weights_path = args["model_path"]
     model_name = args["model_path"].split("/")[-1].split(".")[0]
